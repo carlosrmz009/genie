@@ -2,9 +2,9 @@
 
 <img src="icon.png" width="112" alt="ytplay icon: a gold eighth note on a walnut tile">
 
-# ytplay
+# genie
 
-**Turn any piano video into a player-piano roll you can watch and hear.**
+**Your wish is my command**
 
 [![Rust](https://img.shields.io/badge/Rust-5A3A22?style=flat-square&logo=rust&logoColor=white)](https://www.rust-lang.org)
 [![Windows](https://img.shields.io/badge/Windows-5A3A22?style=flat-square&logo=windows&logoColor=white)](#requirements)
