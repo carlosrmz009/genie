@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="icon.png" width="112" alt="ytplay icon: a gold eighth note on a walnut tile">
+<img src="icon.png" width="112" alt="piano genie icon: a gold eighth note on a walnut tile">
 
-# genie
+# piano genie
 
 **Your wish is my command**
 
@@ -19,7 +19,7 @@
 
 <br>
 
-Paste a YouTube link, or just type the name of a piece. ytplay downloads the audio, transcribes every note with a neural network, and plays the result back through a piano SoundFont while the notes scroll down a paper roll onto the keys.
+Paste a YouTube link, or just type the name of a piece. piano genie downloads the audio, transcribes every note with a neural network, and plays the result back through a piano SoundFont while the notes scroll down a paper roll onto the keys.
 
 ## Features
 
@@ -61,7 +61,7 @@ Transkun still imports `pkg_resources`, which newer `setuptools` releases remove
 
 **2. Add a SoundFont**
 
-Put a piano SoundFont at `%USERPROFILE%\ytplay\soundfont.sf2`. The free [Salamander Grand Piano](https://freepats.zenvoid.org/Piano/acoustic-grand-piano.html) is a good choice.
+Put a piano SoundFont at `%USERPROFILE%\piano genie\soundfont.sf2`. The free [Salamander Grand Piano](https://freepats.zenvoid.org/Piano/acoustic-grand-piano.html) is a good choice.
 
 **3. Build and run**
 
@@ -69,7 +69,7 @@ Put a piano SoundFont at `%USERPROFILE%\ytplay\soundfont.sf2`. The free [Salaman
 cargo build --release
 ```
 
-The app is `target\release\ytplay.exe`. Copy it anywhere you like.
+The app is `target\release\piano-genie.exe`. Copy it anywhere you like.
 
 ### GPU transcription
 
@@ -79,7 +79,7 @@ With an NVIDIA GPU, install the CUDA build of PyTorch so Transkun runs on the GP
 pip install --force-reinstall torch torchaudio --index-url https://download.pytorch.org/whl/cu130
 ```
 
-Without it, ytplay transcribes on the CPU automatically.
+Without it, piano genie transcribes on the CPU automatically.
 
 ## Controls
 
@@ -100,10 +100,10 @@ flowchart LR
     C -- macroquad --> E["Piano roll"]
 ```
 
-The audio thread is the clock: the roll is drawn from the number of samples sent to the speakers, so picture and sound can't drift apart. Everything ytplay keeps lives in `%USERPROFILE%\ytplay`:
+The audio thread is the clock: the roll is drawn from the number of samples sent to the speakers, so picture and sound can't drift apart. Everything piano genie keeps lives in `%USERPROFILE%\piano genie`:
 
 ```
-ytplay\
+piano genie\
 ├── soundfont.sf2       the piano sound
 └── cache\
     ├── <video id>.mp3  downloaded audio

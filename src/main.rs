@@ -15,11 +15,11 @@ const SF2_NAME: &str = "soundfont.sf2";
 
 struct Note { start: f32, end: f32, key: u8 }
 
-/// %USERPROFILE%\ytplay holds the soundfont and the download/MIDI cache, so the exe can live anywhere.
+/// %USERPROFILE%\piano genie holds the soundfont and the download/MIDI cache, so the exe can live anywhere.
 /// Not AppData: packaged apps (Store Python running transkun, MSIX launchers) get AppData writes
 /// silently redirected into their private package folder, where this exe can't see them.
 fn data_dir() -> PathBuf {
-    std::env::var_os("USERPROFILE").map(PathBuf::from).unwrap_or_default().join("ytplay")
+    std::env::var_os("USERPROFILE").map(PathBuf::from).unwrap_or_default().join("piano genie")
 }
 
 fn run(cmd: &mut Command) -> Result<String> {
@@ -63,9 +63,9 @@ fn transcribe(query: &str, status: &Mutex<String>) -> Result<(String, Vec<u8>)> 
     if !midi.exists() {
         // python -m: pip's Scripts dir often isn't on PATH. GPU path needs a CUDA build of torch.
         let transkun = |device: &str| run(Command::new("python").args(["-m", "transkun.transcribe", "--device", device]).arg(&audio).arg(&midi));
-        set(&format!("Transcribing \"{title}\" on GPU..."));
+        set(&format!("Transcribing on GPU: {title}"));
         if transkun("cuda").is_err() {
-            set(&format!("GPU failed, transcribing \"{title}\" on CPU (slow)..."));
+            set(&format!("GPU failed, transcribing on CPU (slow): {title}"));
             transkun("cpu")?;
         }
     }
@@ -351,6 +351,31 @@ fn gilt(font: &Option<Font>, s: &str, x: f32, y: f32, size: u16, color: Color) {
 
 fn text_width(font: &Option<Font>, s: &str, size: u16) -> f32 { measure_text(s, font.as_ref(), size, 1.0).width }
 
+/// Breaks `s` into lines no wider than `max_w` as measured by `width`, between words.
+/// A single word longer than a line keeps its own line.
+fn wrap(s: &str, max_w: f32, width: impl Fn(&str) -> f32) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    for word in s.split_whitespace() {
+        let joined = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
+        if !line.is_empty() && width(&joined) > max_w {
+            lines.push(std::mem::replace(&mut line, word.to_string()));
+        } else {
+            line = joined;
+        }
+    }
+    if !line.is_empty() { lines.push(line); }
+    lines
+}
+
+/// `s` shortened with an ellipsis so it fits in `max_w`.
+fn ellipsize(font: &Option<Font>, s: &str, size: u16, max_w: f32) -> String {
+    if text_width(font, s, size) <= max_w { return s.to_string(); }
+    let mut chars: Vec<char> = s.chars().collect();
+    while !chars.is_empty() && text_width(font, &format!("{}…", chars.iter().collect::<String>()), size) > max_w { chars.pop(); }
+    format!("{}…", chars.iter().collect::<String>().trim_end())
+}
+
 fn clock_str(t: f32) -> String { format!("{}:{:02}", (t.max(0.0) / 60.0) as u32, t.max(0.0) as u32 % 60) }
 
 /// Polished brass plate with a bevelled edge.
@@ -374,6 +399,24 @@ fn round_bottom(x: f32, bottom: f32, w: f32, r: f32, c: Color) {
             draw_triangle(vec2(cx, cy), vec2(cx + r * a0.cos(), cy + r * a0.sin()), vec2(cx + r * a1.cos(), cy + r * a1.sin()), c);
         }
     }
+}
+
+/// `title` as a Windows-safe file name: reserved characters become spaces, runs of spaces collapse.
+fn file_name(title: &str) -> String {
+    let cleaned: String = title.chars().map(|c| if c.is_control() || r#"<>:"/\|?*"#.contains(c) { ' ' } else { c }).collect();
+    let name = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+    let name: String = name.trim_end_matches('.').chars().take(120).collect();
+    if name.is_empty() { "transcription".into() } else { name }
+}
+
+/// Writes the MIDI to Downloads as "<title>.mid" and returns where it went.
+// ponytail: assumes Downloads is %USERPROFILE%\Downloads; ask the shell's known-folder API if users relocate it.
+fn export_midi(title: &str, bytes: &[u8]) -> Result<PathBuf> {
+    let dir = std::env::var_os("USERPROFILE").map(PathBuf::from).context("USERPROFILE is not set")?.join("Downloads");
+    fs::create_dir_all(&dir)?;
+    let path = dir.join(format!("{}.mid", file_name(title)));
+    fs::write(&path, bytes).with_context(|| format!("couldn't write {}", path.display()))?;
+    Ok(path)
 }
 
 /// A screwed-on brass plate with its label stamped in. Returns true when clicked.
@@ -575,9 +618,13 @@ fn draw_roll(a: &Assets, l: &Layout, title: &str, notes: &[Note], t: f32) {
     // Leader: the title printed across the paper, then a ruled start line where the music begins.
     let ty = y_of(-LEAD / 2.0);
     if ty > wy && ty < l.bar_y + 60.0 {
-        text(&a.italic, title, (l.w - text_width(&a.italic, title, 40)) / 2.0, ty, 40, INK);
-        let sub = "transcribed by ytplay";
-        text(&a.roman, sub, (l.w - text_width(&a.roman, sub, 20)) / 2.0, ty + 34.0, 20, alpha(INK, 0.7));
+        let lines = wrap(title, l.w * 0.8, |t| text_width(&a.italic, t, 40));
+        for (i, line) in lines.iter().enumerate() {
+            text(&a.italic, line, (l.w - text_width(&a.italic, line, 40)) / 2.0, ty + i as f32 * 48.0, 40, INK);
+        }
+        let sub = "transcribed by piano genie";
+        let sy = ty + (lines.len().max(1) - 1) as f32 * 48.0 + 34.0;
+        text(&a.roman, sub, (l.w - text_width(&a.roman, sub, 20)) / 2.0, sy, 20, alpha(INK, 0.7));
     }
     let sy = y_of(0.0);
     if sy > wy && sy < l.bar_y { draw_line(l.w * 0.2, sy, l.w * 0.8, sy, 1.5, alpha(INK, 0.5)); }
@@ -635,6 +682,7 @@ async fn ui_loop() {
     let status = Arc::new(Mutex::new(String::new()));
     let (mut query, mut error, mut screen) = (String::new(), String::new(), Screen::Menu);
     let mut live: Option<LivePiano> = None; // opened on the first click on a key, closed when leaving the menu
+    let mut notice: Option<(String, f64)> = None; // export result shown under the top bar, with the time it appeared
     loop {
         let (w, h) = (screen_width(), screen_height());
         let l = layout(w, h);
@@ -652,9 +700,9 @@ async fn ui_loop() {
                 if let Some(k) = key { down[k as usize] = true; }
                 draw_idle(a, &l, &down);
                 let cy = l.bar_y * 0.40;
-                let mark = "ytplay";
+                let mark = "piano genie";
                 gilt(&a.italic, mark, (w - text_width(&a.italic, mark, 104)) / 2.0, cy, 104, GILT);
-                let tag = "Turn a piano recording into a roll you can watch and hear.";
+                let tag = "Your wish is my command";
                 gilt(&a.roman, tag, (w - text_width(&a.roman, tag, 22)) / 2.0, cy + 66.0, 22, GILT_SOFT);
 
                 // Paper slip in a brass frame for the query, a screwed-on brass plate for the action.
@@ -686,9 +734,10 @@ async fn ui_loop() {
                 }
                 // Errors arrive on a paper note tucked under the field.
                 let max_lines = ((l.bar_y - fy - fh - 70.0) / 22.0).max(0.0) as usize;
-                let lines: Vec<&str> = error.lines().take(max_lines).collect();
+                let nw = fw + gap + bw;
+                let lines: Vec<String> = error.lines().flat_map(|line| wrap(line, nw - 28.0, |t| text_width(&a.roman, t, 18))).take(max_lines).collect();
                 if !lines.is_empty() {
-                    let (nx, ny, nw) = (fx, fy + fh + rim + 24.0, fw + gap + bw);
+                    let (nx, ny) = (fx, fy + fh + rim + 24.0);
                     let nh = lines.len() as f32 * 22.0 + 20.0;
                     draw_rectangle(nx + 3.0, ny + 4.0, nw, nh, alpha(BLACK, 0.35));
                     tex(&a.paper, nx, ny, nw, nh, Rect::new(0.0, 0.0, 512.0, (nh / nw * 512.0).min(512.0)), false, WHITE);
@@ -700,9 +749,13 @@ async fn ui_loop() {
             Screen::Busy(rx) => {
                 draw_idle(a, &l, &[false; 128]);
                 let s = status.lock().unwrap().trim_end_matches('.').to_string();
-                let sw = text_width(&a.italic, &s, 34);
-                let cy = l.bar_y * 0.5;
-                gilt(&a.italic, &s, (w - sw) / 2.0, cy, 34, GILT);
+                let lines = wrap(&s, w - 2.0 * l.x0 - 160.0, |t| text_width(&a.italic, t, 34));
+                let first = l.bar_y * 0.5 - (lines.len().max(1) - 1) as f32 * 22.0;
+                for (i, line) in lines.iter().enumerate() {
+                    gilt(&a.italic, line, (w - text_width(&a.italic, line, 34)) / 2.0, first + i as f32 * 44.0, 34, GILT);
+                }
+                let cy = first + (lines.len().max(1) - 1) as f32 * 44.0;
+                let sw = lines.iter().map(|line| text_width(&a.italic, line, 34)).fold(0.0, f32::max);
                 // One slow brass sweep under the status: the only idle motion in the app.
                 let phase = (get_time() as f32 * 0.6).fract();
                 let lw = sw.max(200.0);
@@ -719,12 +772,32 @@ async fn ui_loop() {
             Screen::Play { title, bytes, notes, length, clock, rate, .. } => {
                 let t = clock.load(Ordering::Relaxed) as f32 / rate - LEAD;
                 draw_roll(a, &l, title, notes, t);
-                gilt(&a.italic, title, l.x0 + 6.0, 38.0, 26, GILT);
                 let time = format!("{} / {}", clock_str(t), clock_str(*length));
                 let tw = text_width(&a.roman, &time, 22);
                 gilt(&a.roman, &time, w - l.x0 - tw - 6.0, 37.0, 22, GILT);
+                let (bw, bh) = (172.0, 40.0);
+                let bx = w - l.x0 - tw - 28.0 - bw;
+                if brass_button(a, "Export MIDI", bx, (HEADER_H - bh) / 2.0 - 2.0, bw, bh) {
+                    let msg = match export_midi(title, bytes) {
+                        Ok(path) => format!("Saved to Downloads: {}", path.file_name().unwrap_or_default().to_string_lossy()),
+                        Err(e) => format!("Couldn't export the MIDI: {e:#}"),
+                    };
+                    notice = Some((msg, get_time()));
+                }
                 let hint = "Esc returns to search";
-                gilt(&a.roman, hint, w - l.x0 - tw - 34.0 - text_width(&a.roman, hint, 17), 36.0, 17, GILT_SOFT);
+                let hx = bx - 24.0 - text_width(&a.roman, hint, 17);
+                gilt(&a.roman, hint, hx, 36.0, 17, GILT_SOFT);
+                // The export result hangs under the top bar on a paper slip for a few seconds.
+                if let Some((msg, at)) = &notice {
+                    if get_time() - at < 4.0 {
+                        let mw = text_width(&a.roman, msg, 18) + 28.0;
+                        let (mx, my) = ((w - l.x0 - mw - 6.0).max(l.x0), HEADER_H + 10.0);
+                        draw_rectangle(mx + 2.0, my + 3.0, mw, 32.0, alpha(BLACK, 0.3));
+                        tex(&a.paper, mx, my, mw, 32.0, Rect::new(0.0, 0.0, 512.0, 40.0), false, WHITE);
+                        text(&a.roman, msg, mx + 14.0, my + 22.0, 18, INK);
+                    }
+                }
+                gilt(&a.italic, &ellipsize(&a.italic, title, 26, hx - l.x0 - 40.0), l.x0 + 6.0, 38.0, 26, GILT);
                 if t > *length + 1.5 { // last note released and its tail has rung out
                     let (pw, ph) = (480.0f32.min(w - 2.0 * l.x0 - 40.0), 200.0);
                     let (px, py) = ((w - pw) / 2.0, HEADER_H + (l.bar_y - HEADER_H - ph) / 2.0);
@@ -758,7 +831,7 @@ fn main() {
         medium: *include_bytes!(concat!(env!("OUT_DIR"), "/icon32.rgba")),
         big: *include_bytes!(concat!(env!("OUT_DIR"), "/icon64.rgba")),
     };
-    let conf = Conf { window_title: "ytplay".into(), window_width: 1560, window_height: 800, icon: Some(icon), ..Default::default() };
+    let conf = Conf { window_title: "piano genie".into(), window_width: 1560, window_height: 800, icon: Some(icon), ..Default::default() };
     macroquad::Window::from_config(conf, ui_loop());
 }
 
@@ -793,5 +866,18 @@ mod tests {
         assert_eq!(at(60, l.ww - 2.0, l.kb_y + 5.0), Some(61));     // right edge of C4 at the back is under C#4
         assert_eq!(at(60, l.ww - 2.0, l.kb_y + l.kb_h - 3.0), Some(60)); // same x at the front is C4
         assert_eq!(at(60, 2.0, l.bar_y - 5.0), None);               // above the keyboard
+
+        // Wrapping long titles, measuring one unit per character.
+        let chars = |t: &str| t.chars().count() as f32;
+        assert_eq!(wrap("There Will Never Be Another You", 12.0, chars), ["There Will", "Never Be", "Another You"]);
+        assert_eq!(wrap("short", 12.0, chars), ["short"]);
+        assert_eq!(wrap("a verylongwordhere b", 5.0, chars), ["a", "verylongwordhere", "b"]);
+        assert!(wrap("   ", 5.0, chars).is_empty());
+
+        // Export file names: Windows-reserved characters removed, never empty.
+        assert_eq!(file_name(r#""There Will Never Be Another You" - Jazz: Piano/Sheet?"#), "There Will Never Be Another You - Jazz Piano Sheet");
+        assert_eq!(file_name("Satie - Gymnopédie No. 1"), "Satie - Gymnopédie No. 1");
+        assert_eq!(file_name("???"), "transcription");
+        assert_eq!(file_name("ends with dots..."), "ends with dots");
     }
 }
